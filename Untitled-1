@@ -1,0 +1,295 @@
+
+3
+import socket  # Networking support
+4
+import signal  # Signal support (server shutdown on signal receive)
+5
+import time    # Current time
+6
+ 
+7
+class Server:
+8
+ """ Class describing a simple HTTP server objects."""
+9
+ 
+10
+ def __init__(self, port = 80):
+11
+     """ Constructor """
+12
+     self.host = ''   # <-- works on all avaivable network interfaces
+13
+     self.port = port
+14
+     self.www_dir = 'www' # Directory where webpage files are stored
+15
+ 
+16
+ def activate_server(self):
+17
+     """ Attempts to aquire the socket and launch the server """
+18
+     self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+19
+     try: # user provided in the __init__() port may be unavaivable
+20
+         print("Launching HTTP server on ", self.host, ":",self.port)
+21
+         self.socket.bind((self.host, self.port))
+22
+ 
+23
+     except Exception as e:
+24
+         print ("Warning: Could not aquite port:",self.port,"\n")
+25
+         print ("I will try a higher port")
+26
+         # store to user provideed port locally for later (in case 8080 fails)
+27
+         user_port = self.port
+28
+         self.port = 8080
+29
+ 
+30
+         try:
+31
+             print("Launching HTTP server on ", self.host, ":",self.port)
+32
+             self.socket.bind((self.host, self.port))
+33
+ 
+34
+         except Exception as e:
+35
+             print("ERROR: Failed to acquire sockets for ports ", user_port, " and 8080. ")
+36
+             print("Try running the Server in a privileged user mode.")
+37
+             self.shutdown()
+38
+             import sys
+39
+             sys.exit(1)
+40
+ 
+41
+     print ("Server successfully acquired the socket with port:", self.port)
+42
+     print ("Press Ctrl+C to shut down the server and exit.")
+43
+     self._wait_for_connections()
+44
+ 
+45
+ def shutdown(self):
+46
+     """ Shut down the server """
+47
+     try:
+48
+         print("Shutting down the server")
+49
+         s.socket.shutdown(socket.SHUT_RDWR)
+50
+ 
+51
+     except Exception as e:
+52
+         print("Warning: could not shut down the socket. Maybe it was already closed?",e)
+53
+ 
+54
+ def _gen_headers(self,  code):
+55
+     """ Generates HTTP response Headers. Ommits the first line! """
+56
+ 
+57
+     # determine response code
+58
+     h = ''
+59
+     if (code == 200):
+60
+        h = 'HTTP/1.1 200 OK\n'
+61
+     elif(code == 404):
+62
+        h = 'HTTP/1.1 404 Not Found\n'
+63
+ 
+64
+     # write further headers
+65
+     current_date = time.strftime("%a, %d %b %Y %H:%M:%S", time.localtime())
+66
+     h += 'Date: ' + current_date +'\n'
+67
+     h += 'Server: Simple-Python-HTTP-Server\n'
+68
+     h += 'Connection: close\n\n'  # signal that the conection wil be closed after complting the request
+69
+ 
+70
+     return h
+71
+ 
+72
+ def _wait_for_connections(self):
+73
+     """ Main loop awaiting connections """
+74
+     while True:
+75
+         print ("Awaiting New connection")
+76
+         self.socket.listen(3) # maximum number of queued connections
+77
+ 
+78
+         conn, addr = self.socket.accept()
+79
+         # conn - socket to client
+80
+         # addr - clients address
+81
+ 
+82
+         print("Got connection from:", addr)
+83
+ 
+84
+         data = conn.recv(1024) #receive data from client
+85
+         string = bytes.decode(data) #decode it to string
+86
+ 
+87
+         #determine request method  (HEAD and GET are supported)
+88
+         request_method = string.split(' ')[0]
+89
+         print ("Method: ", request_method)
+90
+         print ("Request body: ", string)
+91
+ 
+92
+         #if string[0:3] == 'GET':
+93
+         if (request_method == 'GET') | (request_method == 'HEAD'):
+94
+             #file_requested = string[4:]
+95
+ 
+96
+             # split on space "GET /file.html" -into-> ('GET','file.html',...)
+97
+             file_requested = string.split(' ')
+98
+             file_requested = file_requested[1] # get 2nd element
+99
+ 
+100
+             #Check for URL arguments. Disregard them
+101
+             file_requested = file_requested.split('?')[0]  # disregard anything after '?'
+102
+ 
+103
+             if (file_requested == '/'):  # in case no file is specified by the browser
+104
+                 file_requested = '/index.html' # load index.html by default
+105
+ 
+106
+             file_requested = self.www_dir + file_requested
+107
+             print ("Serving web page [",file_requested,"]")
+108
+ 
+109
+             ## Load file content
+110
+             try:
+111
+                 file_handler = open(file_requested,'rb')
+112
+                 if (request_method == 'GET'):  #only read the file when GET
+113
+                     response_content = file_handler.read() # read file content
+114
+                 file_handler.close()
+115
+ 
+116
+                 response_headers = self._gen_headers( 200)
+117
+ 
+118
+             except Exception as e: #in case file was not found, generate 404 page
+119
+                 print ("Warning, file not found. Serving response code 404\n", e)
+120
+                 response_headers = self._gen_headers( 404)
+121
+ 
+122
+                 if (request_method == 'GET'):
+123
+                    response_content = b"<html><body><p>Error 404: File not found</p><p>Python HTTP server</p></body></html>"
+124
+ 
+125
+             server_response =  response_headers.encode() # return headers for GET and HEAD
+126
+             if (request_method == 'GET'):
+127
+                 server_response +=  response_content  # return additional conten for GET only
+128
+ 
+129
+             conn.send(server_response)
+130
+             print ("Closing connection with client")
+131
+             conn.close()
+132
+ 
+133
+         else:
+134
+             print("Unknown HTTP request method:", request_method)
+135
+ 
+136
+def graceful_shutdown(sig, dummy):
+137
+    """ This function shuts down the server. It's triggered
+138
+    by SIGINT signal """
+139
+    s.shutdown() #shut down the server
+140
+    import sys
+141
+    sys.exit(1)
+142
+ 
+143
+###########################################################
+144
+# shut down on ctrl+c
+145
+signal.signal(signal.SIGINT, graceful_shutdown)
+146
+ 
+147
+print ("Starting web server")
+
+s = Server(80)  # construct server object
+
+s.activate_server() # aquire the socket
